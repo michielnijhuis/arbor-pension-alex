@@ -367,14 +367,14 @@ const SALDO_DEFAULT_DATA = {
 // Fund-level breakdown per IBAN as of latest BND statement (May '26)
 const SALDO_FUNDS = {
   'NL20BNDA0972686029': [
-    { fund: 'BND Wereld Indexfonds Hedged',                   type: 'Aandelen',   aantal: 968.58, koers: 39.36, waarde: 38121 },
-    { fund: 'BND Euro Staatsobligatie Indexfonds',            type: 'Obligaties', aantal: 333.70, koers:  9.72, waarde:  3244 },
-    { fund: 'BND Euro Investment Grade Obligatie Indexfonds', type: 'Obligaties', aantal: 339.14, koers: 10.50, waarde:  3562 },
+    { fund: 'BND Wereld Indexfonds Hedged',                   type: 'Equity',   aantal: 968.58, koers: 39.36, waarde: 38121 },
+    { fund: 'BND Euro Staatsobligatie Indexfonds',            type: 'Bonds', aantal: 333.70, koers:  9.72, waarde:  3244 },
+    { fund: 'BND Euro Investment Grade Obligatie Indexfonds', type: 'Bonds', aantal: 339.14, koers: 10.50, waarde:  3562 },
   ],
 };
 const FUND_COLORS = {
-  'Aandelen':   '#4d9ef8',
-  'Obligaties': '#3ecfcf',
+  'Equity':   '#4d9ef8',
+  'Bonds':    '#3ecfcf',
 };
 
 let SALDO_DATA;
@@ -936,7 +936,7 @@ function buildAllocChart(){
   const labels = Object.keys(byType);
   const values = labels.map(k => byType[k]);
   const total = values.reduce((a, b) => a + b, 0);
-  const colors = labels.map(k => k === 'Aandelen' ? '#4d9ef8' : (k === 'Obligaties' ? '#3ecfcf' : '#9b7ff4'));
+  const colors = labels.map(k => k === 'Equity' ? '#4d9ef8' : (k === 'Bonds' ? '#3ecfcf' : '#9b7ff4'));
   const ctx = document.getElementById('allocChart');
   if(!ctx) return;
   if(_allocChart) _allocChart.destroy();
