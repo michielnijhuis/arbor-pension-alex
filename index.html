@@ -507,22 +507,51 @@ const AS_DEFAULT_DOTS = {
 // ────────────────────────────────────────────────────────────────
 // STATE
 // ────────────────────────────────────────────────────────────────
-function loadDots(key, defaults){
-  try{
-    const d = JSON.parse(localStorage.getItem(key));
-    return d || JSON.parse(JSON.stringify(defaults));
-  }catch(e){ return JSON.parse(JSON.stringify(defaults)); }
+// Dotations + notes: cross-device via Supabase. Defaults below are bootstrap-only;
+// once Supabase has rows, those win.
+const PERSON_KEY = { mn: 'michiel', as: 'alex' };
+
+async function loadDotsFromSb(person){
+  const { data, error } = await sb.from('pension_dotations')
+    .select('year, dot_id, dot_date, amount_eur, note')
+    .eq('person', PERSON_KEY[person])
+    .order('year', { ascending: false });
+  if (error) { console.warn('loadDotsFromSb', error); return null; }
+  const grouped = {};
+  for (const r of data) {
+    if (!grouped[r.year]) grouped[r.year] = [];
+    grouped[r.year].push({ id: r.dot_id, date: r.dot_date || '', amt: Number(r.amount_eur), note: r.note || '' });
+  }
+  return grouped;
 }
-function saveDots(key, data){ try{ localStorage.setItem(key, JSON.stringify(data)); }catch(e){} }
+async function upsertDotToSb(person, year, dot){
+  const row = { person: PERSON_KEY[person], year, dot_id: dot.id, dot_date: dot.date || '', amount_eur: Number(dot.amt) || 0, note: dot.note || '', updated_at: new Date().toISOString() };
+  const { error } = await sb.from('pension_dotations').upsert(row, { onConflict: 'person,year,dot_id' });
+  if (error) console.error('upsertDotToSb', error);
+}
+async function deleteDotFromSb(person, year, dotId){
+  const { error } = await sb.from('pension_dotations').delete()
+    .eq('person', PERSON_KEY[person]).eq('year', year).eq('dot_id', dotId);
+  if (error) console.error('deleteDotFromSb', error);
+}
+async function loadNotesFromSb(person){
+  const { data, error } = await sb.from('pension_notes')
+    .select('year, note').eq('person', PERSON_KEY[person]);
+  if (error) { console.warn('loadNotesFromSb', error); return {}; }
+  const out = {};
+  for (const r of data) out[r.year] = r.note || '';
+  return out;
+}
+async function upsertNoteToSb(person, year, note){
+  const row = { person: PERSON_KEY[person], year, note: note || '', updated_at: new Date().toISOString() };
+  const { error } = await sb.from('pension_notes').upsert(row, { onConflict: 'person,year' });
+  if (error) console.error('upsertNoteToSb', error);
+}
 
 let MN_DOTS = {};
-let AS_DOTS = loadDots('pension_as_dots_v2', AS_DEFAULT_DOTS);
-
-// Per-year notes
-function loadNotes(key){ try{ return JSON.parse(localStorage.getItem(key))||{}; }catch(e){return {};} }
-function saveNotes(key, data){ try{ localStorage.setItem(key, JSON.stringify(data)); }catch(e){} }
+let AS_DOTS = JSON.parse(JSON.stringify(AS_DEFAULT_DOTS));  // bootstrap; replaced by Supabase load
 let MN_NOTES = {};
-let AS_NOTES = loadNotes('pension_as_notes_v2');
+let AS_NOTES = {};
 
 // ────────────────────────────────────────────────────────────────
 // HELPERS
@@ -699,15 +728,13 @@ function toggleBlock(id){
 function getDotsObj(person){ return person==='mn'?MN_DOTS:AS_DOTS; }
 function getBase(person){ return person==='mn'?MN_BASE:AS_BASE; }
 function getNotesObj(person){ return person==='mn'?MN_NOTES:AS_NOTES; }
-function saveAll(person){ saveDots(person==='mn'?'pension_mn_dots_v2':'pension_as_dots_v2', getDotsObj(person)); }
-function saveAllNotes(person){ saveNotes(person==='mn'?'pension_mn_notes_v2':'pension_as_notes_v2', getNotesObj(person)); }
-
 function addDot(person, year){
   const dotsObj = getDotsObj(person);
   if(!dotsObj[year]) dotsObj[year] = [];
   const id = nextId(dotsObj[year]||[]);
-  dotsObj[year].push({id, date:'', amt:'', note:''});
-  saveAll(person);
+  const newDot = {id, date:'', amt:'', note:''};
+  dotsObj[year].push(newDot);
+  upsertDotToSb(person, year, newDot);
   refreshDots(person, year);
   // auto-open edit for new entry
   setTimeout(()=>editDot(person, year, id), 50);
@@ -734,7 +761,7 @@ function saveDotEdit(person, year, id){
   d.date = document.getElementById(`${person}_de_date_${year}_${id}`)?.value||'';
   d.amt  = parseFloat(document.getElementById(`${person}_de_amt_${year}_${id}`)?.value)||0;
   d.note = document.getElementById(`${person}_de_note_${year}_${id}`)?.value||'';
-  saveAll(person);
+  upsertDotToSb(person, year, d);
   refreshDots(person, year);
 }
 function deleteDot(person, year, id){
@@ -744,14 +771,14 @@ function deleteDot(person, year, id){
 function deleteDotSilent(person, year, id){
   const dotsObj = getDotsObj(person);
   dotsObj[year] = (dotsObj[year]||[]).filter(d=>d.id!==id);
-  saveAll(person);
+  deleteDotFromSb(person, year, id);
   refreshDots(person, year);
 }
 
 function saveYrNote(person, year){
   const notesObj = getNotesObj(person);
   const el = document.getElementById(`${person}_note_${year}`);
-  if(el){ notesObj[year] = el.value; saveAllNotes(person); }
+  if(el){ notesObj[year] = el.value; upsertNoteToSb(person, year, el.value); }
 }
 
 function refreshDots(person, year){
@@ -1198,13 +1225,15 @@ function exportPensionPDF(){
   buildSaldoKpis();
   buildSaldoTable();
   buildStatusBar();
+  // Load dotations + notes from Supabase, then rebuild
+  const sbDots = await loadDotsFromSb('as');
+  if (sbDots) AS_DOTS = sbDots;
+  AS_NOTES = await loadNotesFromSb('as');
+  buildOvKpis();
+  buildTable(AS_BASE, AS_DOTS, 'asTableBody', false);
+  buildBlocks(AS_BASE, AS_DOTS, AS_NOTES, 'asBlocks', 'as');
+  rebuildCharts();
 })();
-buildOvKpis();
-// removed MN table
-buildTable(AS_BASE, AS_DOTS, 'asTableBody', false);
-// removed MN blocks
-buildBlocks(AS_BASE, AS_DOTS, AS_NOTES, 'asBlocks', 'as');
-rebuildCharts();
 </script>
 </body>
 </html>
